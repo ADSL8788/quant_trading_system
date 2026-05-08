@@ -50,3 +50,14 @@ TradingAgents/
 dexter/
 auto_screener_results.csv
 auto_screener_results.csv
+*.bak
+*.bak2
+*.bak3
+*.broken
+*.error
+*.manual
+*.old
+manual_scan_results.csv
+batch_add_from_csv.py
+batch_remove.py
+clear_extra.py
