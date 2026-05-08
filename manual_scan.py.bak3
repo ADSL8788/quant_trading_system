@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""手工全市场技术扫描 - 按日期遍历全市场数据（高效缓存版）"""
+import sys
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+import os
+
+sys.path.append('/home/fafa6/auto_trading_system')
+from data_layer.tushare_client import TushareClient
+from config.settings import config
+import add_stock
+
+def calculate_rsi(close, period=14):
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def get_trade_dates(start_date, end_date):
+    """获取期间内的交易日列表（使用Tushare）"""
+    client = TushareClient()
+    pro = client.pro
+    # 获取交易日历
+    df = pro.trade_cal(exchange='SSE', start_date=start_date.strftime('%Y%m%d'), end_date=end_date.strftime('%Y%m%d'))
+    if df.empty:
+        return []
+    df = df[df['is_open'] == 1]
+    dates = pd.to_datetime(df['cal_date']).sort_values()
+    return dates
+
+def ensure_date_cache(start_date, end_date):
+    """确保指定日期范围内的全市场数据已缓存"""
+    cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    client = TushareClient()
+    pro = client.pro
+    dates = get_trade_dates(start_date, end_date)
+    missing_dates = []
+    for d in dates:
+        cache_file = os.path.join(cache_dir, f"date_{d.strftime('%Y%m%d')}.parquet")
+        if not os.path.exists(cache_file):
+            missing_dates.append(d)
+    if missing_dates:
+        print(f"📥 正在下载 {len(missing_dates)} 个交易日的全市场数据...")
+        for d in missing_dates:
+            date_str = d.strftime('%Y%m%d')
+            print(f"  下载 {date_str}...")
+            # 分页获取全市场数据（避免一次请求数据量过大，Tushare自动分页）
+            df = pro.daily(trade_date=date_str)
+            if df is not None and not df.empty:
+                df.to_parquet(cache_file, index=False)
+                print(f"    ✅ 已缓存 {date_str}, {len(df)} 条记录")
+            else:
+                print(f"    ⚠️ 无数据 {date_str}")
+    else:
+        print("✅ 全市场数据缓存已存在")
+
+def load_all_data(start_date, end_date):
+    """加载所有缓存的全市场数据，返回按股票代码分组的时间序列字典 {ts_code: DataFrame}"""
+    cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
+    dates = get_trade_dates(start_date, end_date)
+    stock_data = {}
+    # 先收集每个股票的记录列表
+    for d in dates:
+        cache_file = os.path.join(cache_dir, f"date_{d.strftime('%Y%m%d')}.parquet")
+        if not os.path.exists(cache_file):
+            continue
+        df_day = pd.read_parquet(cache_file)
+        # 只保留需要的列
+        df_day = df_day[['ts_code', 'open', 'high', 'low', 'close', 'vol']]
+        df_day['trade_date'] = d
+        for _, row in df_day.iterrows():
+            ts_code = row['ts_code']
+            if ts_code not in stock_data:
+                stock_data[ts_code] = []
+            stock_data[ts_code].append(row)
+    # 转换为 DataFrame
+    for ts_code in list(stock_data.keys()):
+        df = pd.DataFrame(stock_data[ts_code])
+        df = df.sort_values('trade_date')
+        # 转换列名
+        df = df.rename(columns={'vol': 'volume'})
+        df.set_index('trade_date', inplace=True)
+        stock_data[ts_code] = df
+    return stock_data
+
+def scan_stocks():
+    # 参数设置
+    SHORT_MA = 20
+    LONG_MA = 60
+    MOMENTUM_MIN = 0.03
+    MOMENTUM_MAX = 0.50
+    RSI_MIN = 35
+    RSI_MAX = 65
+    PULLBACK_MAX = -0.15
+    VOLATILITY_MIN = 0.02
+
+    # 日期范围：最近120个交易日到昨天
+    end_date = datetime.now() - timedelta(days=1)
+    start_date = end_date - timedelta(days=200)  # 多取一些确保120个交易日
+    start_date = max(start_date, datetime(2020,1,1))  # 避免太早
+
+    # 确保缓存
+    ensure_date_cache(start_date, end_date)
+
+    print("📊 加载全市场历史数据...")
+    stock_data = load_all_data(start_date, end_date)
+    print(f"✅ 加载了 {len(stock_data)} 只股票的时间序列")
+
+    # 过滤上市时间不足的股票
+    min_len = LONG_MA + 10
+    valid_stocks = []
+    for ts_code, df in stock_data.items():
+        if len(df) >= min_len:
+            valid_stocks.append(ts_code)
+    print(f"✅ 有效股票数（数据长度≥{min_len}）: {len(valid_stocks)}")
+
+    results = []
+    total = len(valid_stocks)
+    print("🔍 开始技术指标计算...")
+    for idx, ts_code in enumerate(valid_stocks, 1):
+        if idx % 200 == 0:
+            print(f"  进度: {idx}/{total}")
+        df = stock_data[ts_code].copy()
+        close = df['close']
+        high = df['high']
+        volume = df['volume']
+
+        # 计算指标
+        short_ma = close.rolling(SHORT_MA).mean().iloc[-1]
+        long_ma = close.rolling(LONG_MA).mean().iloc[-1]
+        current_price = close.iloc[-1]
+
+        if short_ma <= long_ma:
+            continue
+        if current_price <= short_ma:
+            continue
+
+        if len(close) >= 22:
+            momentum = (close.iloc[-1] / close.iloc[-22]) - 1
+        else:
+            continue
+        if not (MOMENTUM_MIN <= momentum <= MOMENTUM_MAX):
+            continue
+
+        if len(close) >= 15:
+            rsi = calculate_rsi(close).iloc[-1]
+        else:
+            continue
+        if not (RSI_MIN <= rsi <= RSI_MAX):
+            continue
+
+        high_20 = high.rolling(20).max().iloc[-1]
+        pullback = (current_price - high_20) / high_20
+        if pullback <= PULLBACK_MAX:
+            continue
+
+        if len(close) >= 20:
+            vol = close.iloc[-20:].std() / close.iloc[-20:].mean()
+        else:
+            continue
+        if vol < VOLATILITY_MIN:
+            continue
+
+        # 获取股票名称
+        name = ts_code   # 临时，后面可补全
+        try:
+            from tushare import pro_api
+            pro = pro_api()
+            basic = pro.stock_basic(ts_code=ts_code, fields='name')
+            if not basic.empty:
+                name = basic.iloc[0]['name']
+        except:
+            pass
+
+        results.append({
+            'ts_code': ts_code,
+            'name': name,
+            'momentum': momentum,
+            'current_price': current_price,
+            'short_ma': short_ma,
+            'long_ma': long_ma,
+            'rsi': rsi,
+            'pullback': pullback,
+            'volatility': vol
+        })
+
+    results_df = pd.DataFrame(results)
+    if results_df.empty:
+        print("\n⚠️ 未找到符合条件的股票")
+        return
+
+    results_df = results_df.sort_values('momentum', ascending=False)
+    top_n = 20
+    print(f"\n🏆 符合条件的前 {top_n} 只股票（按动量排序）")
+    print("="*80)
+    for i, row in results_df.head(top_n).iterrows():
+        print(f"{row['ts_code']:<12} {row['name']:<10} 现价:{row['current_price']:<8.2f} 动量:{row['momentum']:>6.1%} "
+              f"RSI:{row['rsi']:.0f} 回撤:{row['pullback']:>6.1%} 波动率:{row['volatility']:.2%}")
+
+    results_df.to_csv('manual_scan_results.csv', index=False, encoding='utf-8-sig')
+    print(f"\n✅ 完整结果已保存到 manual_scan_results.csv")
+
+    # 交互式添加到预设池
+    print(f"\n📌 是否将前 {top_n} 只股票添加到预设池？(y/n): ", end='')
+    choice = input().strip().lower()
+    if choice == 'y':
+        added = 0
+        for _, row in results_df.head(top_n).iterrows():
+            ts_code = row['ts_code']
+            name = row['name']
+            try:
+                if add_stock.add_stock(ts_code, name):
+                    added += 1
+            except Exception as e:
+                print(f"添加 {ts_code} 失败: {e}")
+        print(f"✅ 已添加 {added} 只股票到预设池，现在可以运行 `tr` 进行三工具完整分析。")
+    else:
+        print("未添加，您也可以稍后手动使用 `add 代码 名称` 添加感兴趣的股票。")
+
+if __name__ == "__main__":
+    scan_stocks()

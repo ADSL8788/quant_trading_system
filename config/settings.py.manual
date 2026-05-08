@@ -1,0 +1,93 @@
+"""系统配置文件 - 安全版（支持动态扩展股票池）"""
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class Config:
+    """全局配置"""
+    
+    TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN")
+    DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+    DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+    REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+    
+    # ========== 板块分类（固定部分） ==========
+    BATTERY_STOCKS = [
+        {"ts_code": "300750.SZ", "name": "宁德时代", "sector": "电池"},
+        {"ts_code": "002074.SZ", "name": "国轩高科", "sector": "电池"},
+        {"ts_code": "300014.SZ", "name": "亿纬锂能", "sector": "电池"},
+        {"ts_code": "002812.SZ", "name": "恩捷股份", "sector": "电池"},
+        {"ts_code": "300568.SZ", "name": "星源材质", "sector": "电池"},
+        {"ts_code": "002460.SZ", "name": "赣锋锂业", "sector": "电池"},
+    ]
+    
+    ROBOT_STOCKS = [
+        {"ts_code": "300124.SZ", "name": "汇川技术", "sector": "机器人"},
+        {"ts_code": "002230.SZ", "name": "科大讯飞", "sector": "机器人"},
+        {"ts_code": "002747.SZ", "name": "埃斯顿", "sector": "机器人"},
+        {"ts_code": "300024.SZ", "name": "机器人", "sector": "机器人"},
+        {"ts_code": "688017.SH", "name": "绿的谐波", "sector": "机器人"},
+        {"ts_code": "688165.SH", "name": "埃夫特", "sector": "机器人"},
+    ]
+    
+    TRANSFORMER_STOCKS = [
+        {"ts_code": "600089.SH", "name": "特变电工", "sector": "变压器"},
+        {"ts_code": "601877.SH", "name": "正泰电器", "sector": "变压器"},
+        {"ts_code": "002028.SZ", "name": "思源电气", "sector": "变压器"},
+        {"ts_code": "600406.SH", "name": "国电南瑞", "sector": "变压器"},
+        {"ts_code": "300274.SZ", "name": "阳光电源", "sector": "变压器"},
+        {"ts_code": "688063.SH", "name": "派能科技", "sector": "变压器"},
+    ]
+    
+    AI_STOCKS = [
+        {"ts_code": "002230.SZ", "name": "科大讯飞", "sector": "AI"},
+        {"ts_code": "300059.SZ", "name": "东方财富", "sector": "AI"},
+        {"ts_code": "603019.SH", "name": "中科曙光", "sector": "AI"},
+        {"ts_code": "000977.SZ", "name": "浪潮信息", "sector": "AI"},
+        {"ts_code": "300418.SZ", "name": "昆仑万维", "sector": "AI"},
+        {"ts_code": "002415.SZ", "name": "海康威视", "sector": "AI"},
+        {"ts_code": "688981.SH", "name": "中芯国际", "sector": "AI"},
+        {"ts_code": "300308.SZ", "name": "中际旭创", "sector": "AI"},
+    ]
+    
+    DIGITAL_COIN_STOCKS = [
+        {"ts_code": "300059.SZ", "name": "东方财富", "sector": "数字货币"},
+        {"ts_code": "002152.SZ", "name": "广电运通", "sector": "数字货币"},
+        {"ts_code": "300773.SZ", "name": "拉卡拉", "sector": "数字货币"},
+        {"ts_code": "600570.SH", "name": "恒生电子", "sector": "数字货币"},
+        {"ts_code": "002537.SZ", "name": "海联金汇", "sector": "数字货币"},
+        {"ts_code": "300465.SZ", "name": "高伟达", "sector": "数字货币"},
+    ]
+    
+    # ========== 通过 add 命令添加的股票（仅存放于此） ==========
+    {"ts_code": "600186.SH", "name": "莲花控股", "sector": "其他"},
+    EXTRA_STOCKS = []
+    # ========== 合并所有股票池 ==========
+    WATCHLIST = (BATTERY_STOCKS + ROBOT_STOCKS + TRANSFORMER_STOCKS +
+                 AI_STOCKS + DIGITAL_COIN_STOCKS + EXTRA_STOCKS)
+    
+    KRONOS_CONFIG = {"lookback": 120, "pred_len": 60, "min_confidence": 0.25}
+    PAPER_TRADING = os.getenv("PAPER_TRADING", "true").lower() == "true"
+    INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", 1000000))
+    MAX_SINGLE_POSITION = 0.10
+    MAX_SECTOR_POSITION = 0.30
+    STOP_LOSS = 0.07
+    TAKE_PROFIT = 0.15
+    WECHAT_WEBHOOK = os.getenv("WECHAT_WEBHOOK", "")
+    SERVER_CHAN_KEY = os.getenv("SERVER_CHAN_KEY", "")
+
+config = Config()
+
+# 打印信息
+from collections import defaultdict
+sector_count = defaultdict(int)
+for stock in config.WATCHLIST:
+    sector_count[stock.get('sector', '未分类')] += 1
+
+print(f"✅ 配置加载成功")
+print(f"   股票池数量: {len(config.WATCHLIST)} 只")
+print(f"   板块分布: {', '.join([f'{k}:{v}只' for k,v in sector_count.items()])}")
+print(f"   仓位管理: 单票{config.MAX_SINGLE_POSITION:.0%} | 板块{config.MAX_SECTOR_POSITION:.0%}")
+print(f"   风控: 止损{config.STOP_LOSS:.0%} | 止盈{config.TAKE_PROFIT:.0%}")

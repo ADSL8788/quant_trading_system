@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""手工全市场技术扫描 - 复用现有K线缓存，逐只计算指标（修复 KeyError: 'market'）"""
+import sys
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+import time
+from tqdm import tqdm
+
+sys.path.append('/home/fafa6/auto_trading_system')
+from data_layer.tushare_client import TushareClient
+from config.settings import config
+import add_stock
+
+def calculate_rsi(close, period=14):
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def get_all_stocks():
+    """获取全市场股票列表（排除ST、退市、上市不足180天）"""
+    client = TushareClient()
+    pro = client.pro
+    stocks = pro.stock_basic(exchange='', list_status='L', fields='ts_code,name,list_date')
+    today = datetime.now()
+    stocks = stocks[
+        (pd.to_datetime(stocks['list_date']) < (today - timedelta(days=180))) &
+        (~stocks['name'].str.contains('ST|退', case=False, na=False))
+    ]
+    print(f"📊 初始股票池: {len(stocks)} 只（上市≥180天，非ST）")
+    return stocks
+
+def scan_stocks():
+    # 参数设置（可根据需要调整）
+    SHORT_MA = 20
+    LONG_MA = 60
+    MOMENTUM_MIN = 0.03
+    MOMENTUM_MAX = 0.50
+    RSI_MIN = 35
+    RSI_MAX = 65
+    PULLBACK_MAX = -0.15
+    VOLATILITY_MIN = 0.02
+
+    print("🚀 开始全市场技术扫描（复用现有K线缓存）")
+    stocks_df = get_all_stocks()
+    total = len(stocks_df)
+    print(f"🔍 共 {total} 只股票，开始逐只分析（首次运行需下载缺失K线，之后秒级）...")
+
+    client = TushareClient()
+    results = []
+    # 使用 tqdm 进度条
+    for _, row in tqdm(stocks_df.iterrows(), total=total, desc="扫描进度"):
+        ts_code = row['ts_code']
+        name = row['name']
+        # 获取日线数据（自动使用缓存，若缓存不存在则下载）
+        df = client.get_kline(ts_code, days=250)  # 获取250天确保足够计算60日均线
+        if df is None or len(df) < LONG_MA + 10:
+            continue
+
+        close = df['close']
+        high = df['high']
+        current_price = close.iloc[-1]
+
+        # 均线条件
+        short_ma = close.rolling(SHORT_MA).mean().iloc[-1]
+        long_ma = close.rolling(LONG_MA).mean().iloc[-1]
+        if short_ma <= long_ma or current_price <= short_ma:
+            continue
+
+        # 动量（21日涨幅）
+        if len(close) >= 22:
+            momentum = (close.iloc[-1] / close.iloc[-22]) - 1
+        else:
+            continue
+        if not (MOMENTUM_MIN <= momentum <= MOMENTUM_MAX):
+            continue
+
+        # RSI
+        if len(close) >= 15:
+            rsi = calculate_rsi(close).iloc[-1]
+        else:
+            continue
+        if not (RSI_MIN <= rsi <= RSI_MAX):
+            continue
+
+        # 回撤（20日高点）
+        high_20 = high.rolling(20).max().iloc[-1]
+        pullback = (current_price - high_20) / high_20
+        if pullback <= PULLBACK_MAX:
+            continue
+
+        # 波动率
+        if len(close) >= 20:
+            vol = close.iloc[-20:].std() / close.iloc[-20:].mean()
+        else:
+            continue
+        if vol < VOLATILITY_MIN:
+            continue
+
+        results.append({
+            'ts_code': ts_code,
+            'name': name,
+            'momentum': momentum,
+            'current_price': current_price,
+            'short_ma': short_ma,
+            'long_ma': long_ma,
+            'rsi': rsi,
+            'pullback': pullback,
+            'volatility': vol
+        })
+        # 极简限流：每20只暂停0.05秒（避免 API 突发，但 get_kline 已有缓存，实际调用少）
+        if len(results) % 20 == 0:
+            time.sleep(0.05)
+
+    results_df = pd.DataFrame(results)
+    if results_df.empty:
+        print("\n⚠️ 未找到符合条件的股票")
+        return
+
+    results_df = results_df.sort_values('momentum', ascending=False)
+    top_n = 20
+    print(f"\n🏆 符合条件的前 {top_n} 只股票（按动量排序）")
+    print("="*80)
+    for i, row in results_df.head(top_n).iterrows():
+        print(f"{row['ts_code']:<12} {row['name']:<12} 现价:{row['current_price']:<8.2f} 动量:{row['momentum']:>6.1%} "
+              f"RSI:{row['rsi']:.0f} 回撤:{row['pullback']:>6.1%} 波动率:{row['volatility']:.2%}")
+
+    results_df.to_csv('manual_scan_results.csv', index=False, encoding='utf-8-sig')
+    print(f"\n✅ 完整结果已保存到 manual_scan_results.csv")
+
+    # 交互式添加到预设池
+    print(f"\n📌 是否将前 {top_n} 只股票添加到预设池？(y/n): ", end='')
+    choice = input().strip().lower()
+    if choice == 'y':
+        added = 0
+        for _, row in results_df.head(top_n).iterrows():
+            ts_code = row['ts_code']
+            name = row['name']
+            try:
+                if add_stock.add_stock(ts_code, name):
+                    added += 1
+            except Exception as e:
+                print(f"添加 {ts_code} 失败: {e}")
+        print(f"✅ 已添加 {added} 只股票到预设池，现在可以运行 `tr` 进行三工具完整分析。")
+    else:
+        print("未添加，您也可以稍后手动使用 `add 代码 名称` 添加感兴趣的股票。")
+
+if __name__ == "__main__":
+    scan_stocks()
