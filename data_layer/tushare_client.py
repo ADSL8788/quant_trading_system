@@ -1,112 +1,119 @@
 #!/usr/bin/env python3
-"""Tushare数据客户端 - 自动增量更新缓存（增加延时防限流）"""
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import tushare as ts
 import pandas as pd
+import numpy as np
+import logging
+import os
 from datetime import datetime, timedelta
-import time
-from loguru import logger
 from config.settings import config
 
+# 配置日志，方便在后台查看报错
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 class TushareClient:
-    def __init__(self):
-        ts.set_token(config.TUSHARE_TOKEN)
-        self.pro = ts.pro_api()
-        self.cache_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cache')
-        os.makedirs(self.cache_dir, exist_ok=True)
-        print("✅ Tushare客户端初始化成功")
+    def __init__(self, cache_dir=".cache_data"):
+        """
+        Tushare 客户端初始化
+        :param cache_dir: 本地缓存文件夹名称
+        """
+        import tushare as ts
+        try:
+            # 使用配置中的 token 初始化
+            self.pro = ts.pro_api(config.TUSHARE_TOKEN)
+            logger.info("✅ Tushare API 初始化成功")
+        except Exception as e:
+            logger.error(f"❌ Tushare API 初始化失败: {e}")
+            raise e
 
-    def _get_cache_path(self, ts_code, days):
-        return os.path.join(self.cache_dir, f"{ts_code}_{days}.parquet")
+        # 创建缓存目录
+        self.cache_dir = cache_dir
+        if not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir)
+            logger.info(f"📁 创建缓存目录: {self.cache_dir}")
 
-    def _load_cache(self, ts_code, days):
-        path = self._get_cache_path(ts_code, days)
-        if os.path.exists(path):
-            try:
-                df = pd.read_parquet(path)
-                if not df.empty and 'timestamp' in df.columns:
+    def get_kline(self, ts_code: str, days: int = 500, use_cache: bool = True):
+        """
+        获取K线数据 - 增强版 (含缓存与类型修复)
+        :param ts_code: 股票代码 (例如 '000001.SZ')
+        :param days: 回溯天数
+        :param use_cache: 是否使用本地缓存
+        """
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        
+        start_str = start_date.strftime('%Y%m%d')
+        end_str = end_date.strftime('%Y%m%d')
+
+        # --- 1. 缓存检查逻辑 ---
+        # 缓存文件名包含 ts_code 和 days，防止不同时间窗口的数据混淆
+        cache_file = os.path.join(self.cache_dir, f"{ts_code}_{days}.csv")
+        
+        if use_cache and os.path.exists(cache_file):
+            # 检查文件最后修改时间是否为今天
+            file_mod_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
+            if file_mod_time.date() == end_date.date():
+                # logger.debug(f"📦 从缓存加载: {ts_code}")
+                try:
+                    df = pd.read_csv(cache_file, index_col=0)
+                    # 重新将 timestamp 转换为 datetime 对象
+                    if 'timestamp' in df.columns:
+                        df['timestamp'] = pd.to_datetime(df['timestamp'])
                     return df
-            except:
-                pass
-        return None
+                except Exception as e:
+                    logger.warning(f"⚠️ 缓存读取失败 {ts_code}, 将重新请求 API: {e}")
 
-    def _save_cache(self, ts_code, days, df):
-        if df is not None and not df.empty:
-            path = self._get_cache_path(ts_code, days)
-            df.to_parquet(path, index=False)
-            print(f"💾 缓存保存 {ts_code} ({len(df)}条)")
+        # --- 2. API 请求逻辑 ---
+        df = self._fetch_from_api(ts_code, start_date=start_str, end_date=end_str)
+
+        # --- 3. 保存至缓存 ---
+        if df is not None and not df.empty and use_cache:
+            try:
+                df.to_csv(cache_file)
+            except Exception as e:
+                logger.error(f"❌ 保存缓存失败 {ts_code}: {e}")
+
+        return df
 
     def _fetch_from_api(self, ts_code, start_date=None, end_date=None):
-        """从Tushare下载数据，并增加延时避免频率超限"""
-        # 延时 0.15 秒，确保频率低于 400 次/分钟（安全阈值）
-        time.sleep(0.15)
-        if start_date is None:
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=200)
-        else:
-            end_date = datetime.now() if end_date is None else datetime.strptime(end_date, '%Y%m%d')
-        df = self.pro.daily(
-            ts_code=ts_code,
-            start_date=start_date.strftime('%Y%m%d') if isinstance(start_date, datetime) else start_date,
-            end_date=end_date.strftime('%Y%m%d') if isinstance(end_date, datetime) else end_date
-        )
-        if df.empty:
-            return None
-        df = df.rename(columns={'trade_date': 'timestamp', 'vol': 'volume'})
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df = df.sort_values('timestamp')
-        return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
-
-    def get_kline(self, ts_code: str, days: int = 120, force_refresh: bool = False) -> pd.DataFrame:
         """
-        获取K线数据，自动增量更新
-        - 如果无缓存，下载全部数据
-        - 如果有缓存，检查最后日期，若早于今天，则下载新数据并合并
+        底层API调用函数，处理数据清洗和类型转换
         """
-        cache_df = self._load_cache(ts_code, days) if not force_refresh else None
+        # 保底日期处理
+        if start_date is None or end_date is None:
+            end_dt = datetime.now()
+            start_dt = end_dt - timedelta(days=200)
+            start_date = start_dt.strftime('%Y%m%d')
+            end_date = end_dt.strftime('%Y%m%d')
 
-        if cache_df is not None and not force_refresh:
-            # 检查缓存中最后日期
-            last_date = pd.to_datetime(cache_df['timestamp'].max()).date()
-            today = datetime.now().date()
-            if last_date >= today:
-                print(f"✅ 缓存命中 {ts_code} (数据已最新)")
-                return cache_df.tail(days)
-            else:
-                # 需要增量更新
-                print(f"🔄 增量更新 {ts_code} (缓存至 {last_date})")
-                start_date = (last_date + timedelta(days=1)).strftime('%Y%m%d')
-                end_date = today.strftime('%Y%m%d')
-                new_df = self._fetch_from_api(ts_code, start_date, end_date)
-                if new_df is not None and not new_df.empty:
-                    # 合并新旧数据
-                    combined = pd.concat([cache_df, new_df], ignore_index=True)
-                    combined = combined.drop_duplicates(subset=['timestamp'], keep='last')
-                    combined = combined.sort_values('timestamp')
-                    self._save_cache(ts_code, days, combined)
-                    return combined.tail(days)
-                else:
-                    # 无新数据，返回缓存
-                    print(f"✅ 缓存命中 {ts_code} (无新数据)")
-                    return cache_df.tail(days)
-        else:
-            # 无缓存，下载全部
-            print(f"🌐 首次下载 {ts_code}")
-            df = self._fetch_from_api(ts_code)
-            if df is not None and not df.empty:
-                self._save_cache(ts_code, days, df)
-                return df.tail(days)
-            else:
-                return pd.DataFrame()
-
-    def get_realtime(self, ts_code: str) -> dict:
         try:
-            df = self.pro.daily_basic(ts_code=ts_code)
-            if not df.empty:
-                return df.iloc[0].to_dict()
-        except:
-            pass
-        return {}
+            # 调用 Tushare 接口获取日线数据
+            df = self.pro.daily(ts_code=ts_code, start=start_date, end=end_date)
+            
+            if df is None or df.empty:
+                return None
+
+            # ============================================================
+            # 核心修复 1: 强制数值类型转换 (pd.to_numeric)
+            # Tushare 有时返回 object 类型，会导致 numpy 计算或 TA-Lib 报错
+            # ============================================================
+            numeric_cols = ['open', 'high', 'low', 'close', 'vol', 'amount']
+            for col in numeric_cols:
+                if col in df.columns:
+                    # errors='coerce' 会将无法转换的值设为 NaN，随后可以通过 ffill 处理
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+            # ============================================================
+            # 核心修复 2: 时间戳标准化与排序
+            # ============================================================
+            if 'trade_date' in df.columns:
+                # 统一创建 timestamp 列，方便 AutoScreener 和预测模型处理
+                df['timestamp'] = pd.to_datetime(df['trade_date']).dt.normalize()
+                
+                # 强制升序排列 (旧 $\rightarrow$ 新)，这是时间序列分析的必须条件
+                df = df.sort_values('timestamp', ascending=True).reset_index(drop=True)
+            
+            return df
+
+        except Exception as e:
+            logger.error(f"❌ API Fetch Error for {ts_code}: {e}")
+            return None

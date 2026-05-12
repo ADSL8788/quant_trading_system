@@ -268,6 +268,9 @@ class FullLiveSimulator:
         return final_summary
 
 def main():
+from data_layer.pool_manager import sync_to_config
+    config.WATCHLIST = sync_to_config()
+
     simulator = FullLiveSimulator()
     
     # 运行一次完整的分析（不实际交易，仅演示）
