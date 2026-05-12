@@ -1,63 +1,32 @@
-# 虚拟环境
-venv/
-env/
-ENV/
-
-# 缓存目录
-cache/
-*.parquet
-*.pkl
-
-# 日志文件
-logs/
-*.log
-
-# 环境变量（包含 API 密钥）
-.env
-
 # Python 缓存
 __pycache__/
 *.pyc
 *.pyo
 
-# 备份文件
-*.bak
-*.backup
+# 虚拟环境
+venv/
 
-# IDE 配置
-.vscode/
-.idea/
+# 数据缓存（很大）
+cache/
+cache_backup/
+data/
 
-# 临时文件
-*.tmp
-.DS_Store
+# CSV 结果文件（可选）
+*.csv
 
-# 配置文件备份
-config/settings.py.bak
-config/settings.py.fullbackup
-
-# 扫描结果 CSV（可选，也可保留）
-# auto_screener_results.csv
-Kronos/
-TradingAgents/
-dexter/
-Kronos/
-TradingAgents/
-dexter/
-auto_screener_results.csv
-Kronos/
-TradingAgents/
-dexter/
-auto_screener_results.csv
-auto_screener_results.csv
+# 日志和临时文件
+*.log
 *.bak
 *.bak2
 *.bak3
-*.broken
-*.error
-*.manual
 *.old
+ma20
+ma60
+monitor.log
+output.log
+
+# 配置文件（可能含密钥）
+config/
+
+# 其他临时报告
 manual_scan_results.csv
-batch_add_from_csv.py
-batch_remove.py
-clear_extra.py
