@@ -48,3 +48,4 @@ daily_task.sh
 auto_screener.py.bak.*
 config/*.backup
 config/*.fullbackup
+analysis_layer/*.bak.*

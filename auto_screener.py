@@ -195,6 +195,9 @@ class AutoScreener:
         tech_ok = self.quick_technical_filter(stocks_with_heat, top_n=2000)
         if tech_ok.empty:
             return tech_ok
+        # 资金流二次排序（可通过 flt 开关 moneyflow_rank 关闭）
+        from moneyflow_rank import rank_by_moneyflow
+        tech_ok = rank_by_moneyflow(tech_ok, weight_flow=0.5, weight_momentum=0.5)
         return tech_ok.head(top_n)
 
 def main():

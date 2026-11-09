@@ -18,5 +18,9 @@
   "volume_filter": {
     "enabled": false,
     "desc": "量能过滤：量比<0.8剔除"
+  },
+  "moneyflow_rank": {
+    "enabled": true,
+    "desc": "资金流二次排序：V4C结果按近5日主力净流入重排"
   }
 }

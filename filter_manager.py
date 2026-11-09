@@ -8,6 +8,7 @@ DEFAULTS = {
     "rsi_upper_filter": {"enabled": True,  "desc": "RSI上限：RSI>70剔除"},
     "pullback_filter":  {"enabled": True,  "desc": "回撤约束：20日高点回撤>15%剔除"},
     "volume_filter":    {"enabled": False, "desc": "量能过滤：量比<0.8剔除"},
+    "moneyflow_rank":   {"enabled": True,  "desc": "资金流二次排序：V4C结果按近5日主力净流入重排"},
 }
 
 def load():
