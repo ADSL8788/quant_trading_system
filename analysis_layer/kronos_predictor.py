@@ -7,12 +7,14 @@ from loguru import logger
 
 class KronosPredictor:
     def __init__(self):
+        self.model_available = False
         self.model = None
         self.tokenizer = None
         self.predictor = None
         self._load_model()
 
     def _load_model(self):
+        return  # 强制降级，不加载真实模型
         try:
             sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Kronos'))
             from model import Kronos, KronosTokenizer, KronosPredictor as KP
@@ -103,7 +105,8 @@ class KronosPredictor:
                 action, expected_return = 'HOLD', 0
                 
             trend_strength = abs(ma_5 - ma_20) / ma_20 if ma_20 > 0 else 0
-            confidence = min(0.85, trend_strength * 10)
+            momentum = (df['close'].iloc[-1] / df['close'].iloc[-21]) - 1 if len(df) >= 21 else 0
+            confidence = min(0.95, trend_strength * 2 + max(0, momentum) * 3)
             
             return {
                 'action': action,

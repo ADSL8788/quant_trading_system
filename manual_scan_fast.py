@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""手工全市场技术扫描 - 多线程加速版（线程数20，默认成分股）"""
+"""手工全市场技术扫描 - 批量获取+本地多线程分析版（无API限流）"""
 import sys
 import os
 import pandas as pd
@@ -15,7 +15,7 @@ import add_stock
 
 # ========== 配置开关 ==========
 USE_FULL_MARKET = True   # False=成分股(快)，True=全市场(慢)
-MAX_WORKERS = 20          # 并发线程数（若遇限流请降低至5-8）
+MAX_WORKERS = 20          # 分析时使用的线程数（仅本地计算，无API请求）
 
 SHORT_MA = 20
 LONG_MA = 60
@@ -34,10 +34,9 @@ def calculate_rsi(close, period=14):
     rsi = 100 - 100 / (1 + rs)
     return rsi
 
-def analyze_one_stock(ts_code, name):
+def analyze_one_stock(ts_code, name, df):
+    """分析单只股票的 K 线数据（df 已由批量接口获取）"""
     try:
-        client = TushareClient()
-        df = client.get_kline(ts_code, days=250)
         if df is None or len(df) < LONG_MA + 10:
             return None
         close = df['close'].values
@@ -93,7 +92,6 @@ def get_stock_pool():
 
     # ---- 获取最近一个交易日 ----
     today = datetime.now().strftime('%Y%m%d')
-    # 从过去30天内找最近的开盘日
     start = (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
     trade_cal = pro.trade_cal(exchange='SSE', start_date=start, end_date=today)
     if trade_cal is not None and not trade_cal.empty:
@@ -115,7 +113,6 @@ def get_stock_pool():
         print(f"📊 全市场股票池: {len(stocks)} 只")
         return [(row['ts_code'], row['name']) for _, row in stocks.iterrows()]
     else:
-        # 使用计算出的最近交易日
         hs300 = pro.index_weight(index_code='000300.SH', trade_date=latest_trade_date)
         zz500 = pro.index_weight(index_code='000905.SH', trade_date=latest_trade_date)
         codes = list(set(hs300['con_code'].tolist() + zz500['con_code'].tolist()))
@@ -128,14 +125,24 @@ def get_stock_pool():
 
 def main():
     stock_list = get_stock_pool()
-    print(f"🔍 使用 {MAX_WORKERS} 个线程并发扫描...")
+    print(f"🚀 批量获取K线数据（250天）...")
+    client = TushareClient()
+    # 提取所有股票代码
+    all_codes = [code for code, _ in stock_list]
+    # 批量获取数据，内部自动分批请求（每批80只）
+    all_data = client.get_kline_batch(all_codes, days=250)
+    print(f"✅ 成功获取 {len(all_data)} 只股票的K线数据")
+
+    print(f"🔍 使用 {MAX_WORKERS} 个线程本地分析...")
     results = []
+    # 准备任务列表：每个任务包含 ts_code, name, df
+    tasks = [(code, name, all_data.get(code)) for code, name in stock_list if code in all_data]
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_stock = {executor.submit(analyze_one_stock, code, name): (code, name)
-                           for code, name in stock_list}
-        with tqdm(total=len(stock_list), desc="扫描进度") as pbar:
-            for future in as_completed(future_to_stock):
+        future_to_task = {executor.submit(analyze_one_stock, code, name, df): (code, name)
+                          for code, name, df in tasks}
+        with tqdm(total=len(tasks), desc="分析进度") as pbar:
+            for future in as_completed(future_to_task):
                 res = future.result()
                 if res:
                     results.append(res)

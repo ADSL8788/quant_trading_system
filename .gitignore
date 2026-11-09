@@ -37,3 +37,6 @@ dexter/
 Kronos/
 TradingAgents/
 dexter/
+manual_scan_results.csv
+*.broken
+daily_task.sh

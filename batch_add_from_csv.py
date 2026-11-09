@@ -6,7 +6,7 @@ import add_stock
 
 def main():
     try:
-        df = pd.read_csv('auto_screener_results.csv')
+        df = pd.read_csv('data/auto_screener_results.csv')
     except FileNotFoundError:
         print("❌ 未找到 auto_screener_results.csv，请先运行 sc 或 scfull")
         return
