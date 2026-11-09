@@ -107,6 +107,9 @@ class KronosPredictor:
             trend_strength = abs(ma_5 - ma_20) / ma_20 if ma_20 > 0 else 0
             momentum = (df['close'].iloc[-1] / df['close'].iloc[-21]) - 1 if len(df) >= 21 else 0
             confidence = min(0.95, trend_strength * 2 + max(0, momentum) * 3)
+            # HOLD 信号方向不明，置信度封顶 50%
+            if action == 'HOLD':
+                confidence = min(confidence, 0.5)
             
             return {
                 'action': action,
