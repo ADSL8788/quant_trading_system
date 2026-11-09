@@ -1,0 +1,22 @@
+{
+  "yearline_filter": {
+    "enabled": true,
+    "desc": "年线过滤：股价须在250日均线上方"
+  },
+  "crowding_filter": {
+    "enabled": true,
+    "desc": "拥挤度约束：20日涨幅>40%降权"
+  },
+  "rsi_upper_filter": {
+    "enabled": true,
+    "desc": "RSI上限：RSI>70剔除"
+  },
+  "pullback_filter": {
+    "enabled": true,
+    "desc": "回撤约束：20日高点回撤>15%剔除"
+  },
+  "volume_filter": {
+    "enabled": false,
+    "desc": "量能过滤：量比<0.8剔除"
+  }
+}

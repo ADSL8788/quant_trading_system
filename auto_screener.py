@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from tqdm import tqdm
 
 from config.settings import config
+from filter_manager import prompt_filter_switches
 from data_layer.tushare_client import TushareClient
 
 class Color:
@@ -125,6 +126,25 @@ class AutoScreener:
             if volatility < 0.02:
                 return None
 
+            # ---- 可插拔过滤规则（Y/N 开关，config/filters.json）----
+            from filter_manager import is_on
+            vol_ratio_val = np.mean(volume[-5:]) / np.mean(volume[-20:])
+
+            if is_on("yearline_filter") and len(close) >= 250:
+                if current_price < np.mean(close[-250:]):
+                    return None
+            if is_on("rsi_upper_filter") and rsi > 70:
+                return None
+            if is_on("pullback_filter") and pullback < -0.15:
+                return None
+            if is_on("volume_filter") and vol_ratio_val < 0.8:
+                return None
+
+            score_val = momentum * 100
+            if is_on("crowding_filter") and momentum > 0.40:
+                score_val *= 0.8
+            # ---- 规则结束 ----
+
             return {
                 'scan_date': datetime.now().strftime('%Y-%m-%d'),
                 'last_date': last_date,
@@ -134,11 +154,11 @@ class AutoScreener:
                 'momentum': round(momentum, 4),
                 'ma20': round(ma20, 2),
                 'ma60': round(ma60, 2),
-                'volume_ratio': round(np.mean(volume[-5:]) / np.mean(volume[-20:]), 2),
+                'volume_ratio': round(vol_ratio_val, 2),
                 'rsi': round(rsi, 1),
                 'volatility': round(volatility, 4),
                 'pullback': round(pullback * 100, 2),
-                'score': momentum * 100,
+                'score': score_val,
                 'exp_change': round(momentum * 100, 1)
             }
         except Exception:
@@ -182,7 +202,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--full', action='store_true', help='全量扫描所有股票')
     parser.add_argument('-y', '--yes', action='store_true', help='自动添加Top20到手动池')
+    parser.add_argument('--no-filter-prompt', action='store_true', help='跳过开关提示（自动化用）')
     args = parser.parse_args()
+
+    if not args.no_filter_prompt:
+        try:
+            prompt_filter_switches()
+        except (EOFError, KeyboardInterrupt):
+            print("→ 跳过开关调整，使用当前状态\n")
 
     screener = AutoScreener()
     if args.full:

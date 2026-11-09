@@ -26,7 +26,12 @@ monitor.log
 output.log
 
 # 配置文件（可能含密钥）
-config/
+# 只忽略 config 下的备份文件，保留 settings.py / filters.json
+config/*.bak
+config/*.bak.*
+config/*.broken
+config/*.error
+config/*.manual
 
 # 其他临时报告
 manual_scan_results.csv
@@ -40,3 +45,6 @@ dexter/
 manual_scan_results.csv
 *.broken
 daily_task.sh
+auto_screener.py.bak.*
+config/*.backup
+config/*.fullbackup
