@@ -14,7 +14,7 @@ from config.settings import config
 import add_stock
 
 # ========== 配置开关 ==========
-USE_FULL_MARKET = True   # False=成分股(快)，True=全市场(慢)
+USE_FULL_MARKET = False   # False=成分股(快)，True=全市场(慢)
 MAX_WORKERS = 20          # 分析时使用的线程数（仅本地计算，无API请求）
 
 SHORT_MA = 20
@@ -113,15 +113,41 @@ def get_stock_pool():
         print(f"📊 全市场股票池: {len(stocks)} 只")
         return [(row['ts_code'], row['name']) for _, row in stocks.iterrows()]
     else:
-        hs300 = pro.index_weight(index_code='000300.SH', trade_date=latest_trade_date)
-        zz500 = pro.index_weight(index_code='000905.SH', trade_date=latest_trade_date)
-        codes = list(set(hs300['con_code'].tolist() + zz500['con_code'].tolist()))
-        name_map = {}
-        for code in codes:
-            basic = pro.stock_basic(ts_code=code, fields='name')
-            name_map[code] = basic.iloc[0]['name'] if not basic.empty else code
-        print(f"📊 成分股股票池: {len(codes)} 只 (沪深300+中证500, 交易日{latest_trade_date})")
-        return [(code, name_map[code]) for code in codes]
+        # index_weight 是月度数据：用上一个完整月范围 + 399300.SZ 代码
+        today_dt = datetime.now()
+        first_this_month = today_dt.replace(day=1)
+        last_month_end = first_this_month - timedelta(days=1)
+        last_month_start = last_month_end.replace(day=1)
+        start_str = last_month_start.strftime('%Y%m%d')
+        end_str = last_month_end.strftime('%Y%m%d')
+
+        def _get_latest_weight(index_codes):
+            for ic in index_codes:
+                try:
+                    df = pro.index_weight(index_code=ic, start_date=start_str, end_date=end_str)
+                    if df is not None and not df.empty:
+                        latest = df['trade_date'].max()
+                        return df[df['trade_date'] == latest]['con_code'].tolist()
+                except Exception:
+                    continue
+            return []
+
+        hs300_codes = _get_latest_weight(['399300.SZ', '000300.SH'])
+        zz500_codes = _get_latest_weight(['000905.SH', '000905.CSI'])
+        codes = list(set(hs300_codes + zz500_codes))
+        if not codes:
+            print("⚠️ 成分股获取失败，自动回退到全市场模式")
+            stocks = pro.stock_basic(exchange='', list_status='L')
+            stocks = stocks[
+                (pd.to_datetime(stocks['list_date']) < (datetime.now() - timedelta(days=180))) &
+                (~stocks['name'].str.contains('ST|退', case=False, na=False))
+            ]
+            return [(row['ts_code'], row['name']) for _, row in stocks.iterrows()]
+        # 一次性拉全市场名称映射，避免 800 次逐只查询
+        all_basic = pro.stock_basic(exchange='', list_status='L', fields='ts_code,name')
+        name_map = dict(zip(all_basic['ts_code'], all_basic['name']))
+        print(f"📊 成分股股票池: {len(codes)} 只 (沪深300+中证500, 数据月{start_str[:6]})")
+        return [(code, name_map.get(code, code)) for code in codes]
 
 def main():
     stock_list = get_stock_pool()
