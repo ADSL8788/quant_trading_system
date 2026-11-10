@@ -51,17 +51,19 @@ class TushareClient:
         cache_file = os.path.join(self.cache_dir, f"{ts_code}_{days}.csv")
 
         if use_cache and os.path.exists(cache_file):
-            mtime = datetime.fromtimestamp(os.path.getmtime(cache_file))
-            if mtime.date() == end_dt.date():
-                try:
-                    df = pd.read_csv(cache_file, index_col=0)
-                    if 'timestamp' in df.columns:
-                        df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    if len(df) > days:
-                        df = df.tail(days).reset_index(drop=True)
-                    return df
-                except Exception as e:
-                    logger.warning(f"缓存读取失败 {ts_code}: {e}")
+            try:
+                df = pd.read_csv(cache_file, index_col=0)
+                if 'timestamp' in df.columns and not df.empty:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    last_data_date = df['timestamp'].max().date()
+                    # 关键：判断缓存里“数据最后日期”是否已是今天，而非文件修改时间
+                    if last_data_date >= end_dt.date():
+                        if len(df) > days:
+                            df = df.tail(days).reset_index(drop=True)
+                        return df
+                    # 数据不是今天，继续走下方下载
+            except Exception as e:
+                logger.warning(f"缓存读取失败 {ts_code}: {e}")
 
         df = self._fetch_from_api(ts_code, start_date=start_str, end_date=end_str)
         if df is not None and not df.empty and use_cache:

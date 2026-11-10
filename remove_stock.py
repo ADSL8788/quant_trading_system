@@ -1,43 +1,30 @@
 #!/usr/bin/env python3
-"""从预设池中删除股票（从 EXTRA_STOCKS 移除）"""
-import sys
-import re
+"""从手动池（data/manual_stocks.json）删除股票"""
+import sys, json, os
 
-SETTINGS_FILE = "config/settings.py"
+JSON_PATH = os.path.join(os.path.dirname(__file__), 'data', 'manual_stocks.json')
 
 def remove_stock(ts_code):
-    with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-        lines = f.readlines()
-
-    new_lines = []
-    found = False
-    for line in lines:
-        if f'"{ts_code}"' in line:
-            found = True
-            continue
-        new_lines.append(line)
-
-    if not found:
-        print(f"⚠️ {ts_code} 不在预设池中")
+    if not os.path.exists(JSON_PATH):
+        print(f"❌ 未找到 {JSON_PATH}")
         return False
-
-    with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-        f.writelines(new_lines)
-
-    print(f"✅ 已删除 {ts_code}")
+    with open(JSON_PATH, encoding='utf-8') as f:
+        data = json.load(f)
+    before = len(data)
+    data = [s for s in data if s.get('ts_code') != ts_code]
+    if len(data) == before:
+        print(f"⚠️ {ts_code} 不在手动池中")
+        return False
+    with open(JSON_PATH, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"✅ 已删除 {ts_code}（手动池 {before} → {len(data)}）")
     return True
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("用法: remove <股票代码>")
-        print("示例: remove 300906")
         sys.exit(0)
-
-    ts_code = sys.argv[1]
-    if '.' not in ts_code:
-        if ts_code.startswith(('60', '68')):
-            ts_code = f"{ts_code}.SH"
-        else:
-            ts_code = f"{ts_code}.SZ"
-
-    remove_stock(ts_code)
+    code = sys.argv[1]
+    if '.' not in code:
+        code = code + ('.SH' if code.startswith(('60','68')) else '.SZ')
+    remove_stock(code)
